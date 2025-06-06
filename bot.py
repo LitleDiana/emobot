@@ -1,23 +1,18 @@
 import os
 import logging
 import sqlite3
-from aiogram import Bot, Dispatcher, types, executor
+import asyncio
+from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from datetime import datetime, timedelta
+from datetime import datetime
 import openai
 import requests
-
-from dotenv import load_dotenv
-load_dotenv()
 
 API_TOKEN = os.getenv("TG_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_KEY")
 openai.api_key = OPENAI_API_KEY
 TTS_VOICE = os.getenv("TTS_VOICE", "Deadly Himalayan Wolf")
 TTS_API_KEY = os.getenv("TTS_API_KEY")
-
-if not API_TOKEN:
-    raise ValueError("TG_BOT_TOKEN не найден! Убедись, что переменная установлена.")
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
@@ -60,12 +55,25 @@ def check_limit(user_id):
         return False
 
 async def generate_response(text, tone):
-    prompt = f"Перепиши следующее сообщение в стиле '{tone.lower()}': {text}"
-    response = openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[{"role": "user", "content": prompt}]
+    prompt = (
+        f"Перепиши следующее сообщение в стиле '{tone.lower()}', "
+        f"даже если оно звучит грубо или негативно, сделай его максимально дружелюбным:\n\n{text}"
     )
-    return response.choices[0].message['content']
+    try:
+        response = await asyncio.wait_for(
+            openai.ChatCompletion.acreate(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}]
+            ),
+            timeout=30
+        )
+        return response.choices[0].message['content']
+
+    except asyncio.TimeoutError:
+        return "Извини, запрос занял слишком много времени. Попробуй позже."
+    except Exception as e:
+        print(f"OpenAI error: {e}")
+        return "Произошла ошибка при генерации ответа. Попробуй ещё раз."
 
 def synthesize_voice(text):
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{TTS_VOICE}"
@@ -114,9 +122,7 @@ async def handle_tone(message: types.Message):
 
     await message.answer("🧠 Думаю над ответом...")
     rewritten = await generate_response(original, tone)
-    await message.answer("Вот вариант:
-
-" + rewritten)
+    await message.answer("Вот вариант:\n\n" + rewritten)
 
     voice_file = synthesize_voice(rewritten)
     if voice_file:
@@ -124,4 +130,5 @@ async def handle_tone(message: types.Message):
             await message.answer_voice(f, caption="🎙️ Озвучка твоего сообщения")
 
 if __name__ == '__main__':
+    from aiogram import executor
     executor.start_polling(dp, skip_updates=True)
